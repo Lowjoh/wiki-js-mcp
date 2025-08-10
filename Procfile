@@ -1,1 +1,1 @@
-web: python app.py
+web: python src/wiki_mcp_server.py
