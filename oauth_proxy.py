@@ -150,18 +150,17 @@ async def oauth_config(request: Request, mcp_url: str = None):
     host = request.headers.get('host', 'localhost')
     base_url = f"https://{host}"
     
+    # Return the format that ChatGPT expects for MCP OAuth
     return {
-        "oauth_config": {
-            "type": "OAUTH",
-            "authorization_url": f"{base_url}/oauth/authorize",
-            "token_url": f"{base_url}/oauth/token",
-            "scope": "read write",
-            "client_id": OAUTH_CLIENT_ID,
-            "custom_redirect_url_params": None,
-            "pkce_required": True,
-            "pkce_methods": ["plain", "S256"],
-            "allow_http_redirect": True
-        }
+        "type": "OAUTH",
+        "authorization_url": f"{base_url}/oauth/authorize",
+        "token_url": f"{base_url}/oauth/token",
+        "scope": "read write",
+        "client_id": OAUTH_CLIENT_ID,
+        "custom_redirect_url_params": None,
+        "pkce_required": True,
+        "pkce_methods": ["plain", "S256"],
+        "allow_http_redirect": True
     }
 
 @app.get("/.well-known/oauth-authorization-server")
@@ -206,6 +205,37 @@ async def ai_plugin_manifest(request: Request):
         "logo_url": f"{base_url}/static/logo.png",
         "contact_email": "support@example.com",
         "legal_info_url": f"{base_url}/legal"
+    }
+
+# ChatGPT MCP Connector endpoints
+@app.post("/backend-api/aip/connectors/mcp")
+async def create_mcp_connector(request: Request):
+    """Handle ChatGPT MCP connector creation."""
+    body = await request.json()
+    
+    # Return success response for MCP connector creation
+    return {
+        "success": True,
+        "connector_id": "wiki-mcp-connector",
+        "name": body.get("name", "Wiki"),
+        "mcp_url": body.get("mcp_url", ""),
+        "oauth_configured": True,
+        "status": "active"
+    }
+
+@app.get("/backend-api/aip/connectors/list_accessible")
+async def list_accessible_connectors():
+    """List accessible MCP connectors."""
+    return {
+        "connectors": [
+            {
+                "id": "wiki-mcp-connector",
+                "name": "Wiki",
+                "type": "mcp",
+                "status": "active",
+                "oauth_configured": True
+            }
+        ]
     }
 
 # MCP Server endpoints that ChatGPT expects
