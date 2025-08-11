@@ -26,7 +26,7 @@ OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "your-client-secret")
 OAUTH_JWT_SECRET = os.getenv("OAUTH_JWT_SECRET", "your-jwt-secret")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
 # ChatGPT MCP connector uses this specific callback format
-OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://chatgpt.com/aip/oauth/callback")
+OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://chatgpt.com/connector_platform_oauth_redirect")
 
 # Database setup
 engine = create_engine("sqlite:///oauth_tokens.db")
@@ -140,12 +140,36 @@ async def authorize(
     redirect_uri: str,
     response_type: str = "code",
     scope: str = "read write",
-    state: str = None
+    state: str = None,
+    code_challenge: str = None,
+    code_challenge_method: str = None,
+    db = Depends(get_db)
 ):
-    """OAuth authorization endpoint."""
-    # Validate client
-    if client_id != OAUTH_CLIENT_ID or redirect_uri != OAUTH_REDIRECT_URI:
-        raise HTTPException(status_code=400, detail="Invalid client_id or redirect_uri")
+    """OAuth authorization endpoint - supports dynamic clients."""
+    print(f"DEBUG: Authorization request - client_id: {client_id}, redirect_uri: {redirect_uri}")
+    
+    # Check if client is registered (either hardcoded or dynamically registered)
+    registered_client = None
+    
+    # First check hardcoded client
+    if client_id == OAUTH_CLIENT_ID:
+        registered_client = {"client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT_URI}
+    else:
+        # Check dynamically registered clients
+        db_client = db.query(OAuthClient).filter(
+            OAuthClient.client_id == client_id
+        ).first()
+        if db_client:
+            registered_client = {"client_id": db_client.client_id, "redirect_uri": db_client.redirect_uri}
+    
+    if not registered_client:
+        print(f"ERROR: Client not found: {client_id}")
+        raise HTTPException(status_code=400, detail="Invalid client_id")
+    
+    # Validate redirect URI
+    if redirect_uri != registered_client["redirect_uri"]:
+        print(f"ERROR: Redirect URI mismatch. Expected: {registered_client['redirect_uri']}, Got: {redirect_uri}")
+        raise HTTPException(status_code=400, detail="Invalid redirect_uri")
     
     if response_type != "code":
         raise HTTPException(status_code=400, detail="Unsupported response_type")
@@ -163,14 +187,30 @@ async def authorize(
 
 @app.post("/oauth/token")
 async def token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
-    """OAuth token endpoint."""
+    """OAuth token endpoint - supports dynamic clients."""
+    print(f"DEBUG: Token request - client_id: {request.client_id}, grant_type: {request.grant_type}")
     
     if request.grant_type != "authorization_code":
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
     
-    # Validate client credentials
-    if (request.client_id != OAUTH_CLIENT_ID or 
-        request.client_secret != OAUTH_CLIENT_SECRET):
+    # Validate client credentials (check both hardcoded and dynamic clients)
+    valid_client = False
+    
+    # Check hardcoded client
+    if (request.client_id == OAUTH_CLIENT_ID and 
+        request.client_secret == OAUTH_CLIENT_SECRET):
+        valid_client = True
+    else:
+        # Check dynamically registered clients
+        db_client = db.query(OAuthClient).filter(
+            OAuthClient.client_id == request.client_id,
+            OAuthClient.client_secret == request.client_secret
+        ).first()
+        if db_client:
+            valid_client = True
+    
+    if not valid_client:
+        print(f"ERROR: Invalid client credentials for: {request.client_id}")
         raise HTTPException(status_code=401, detail="Invalid client credentials")
     
     # Generate tokens
