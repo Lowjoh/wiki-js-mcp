@@ -440,9 +440,17 @@ async def register_client(request: Request, db = Depends(get_db)):
         body = await request.json()
         print(f"DEBUG: Client registration request: {body}")
         
-        # Generate new client credentials for ChatGPT
-        client_id = f"chatgpt-mcp-{secrets.token_urlsafe(16)}"
-        client_secret = secrets.token_urlsafe(32)
+        # Check if this is a request to register the specific ChatGPT client ID
+        requested_client_id = body.get("client_id")
+        if requested_client_id == "chatgpt-mcp-2LTk66lyNl8FuuqPmStFPw":
+            # Register the specific client ID that ChatGPT is expecting
+            client_id = requested_client_id
+            client_secret = secrets.token_urlsafe(32)
+            print(f"DEBUG: Registering specific ChatGPT client ID: {client_id}")
+        else:
+            # Generate new client credentials for ChatGPT
+            client_id = f"chatgpt-mcp-{secrets.token_urlsafe(16)}"
+            client_secret = secrets.token_urlsafe(32)
         
         # Extract registration parameters
         redirect_uris = body.get("redirect_uris", [OAUTH_REDIRECT_URI])
