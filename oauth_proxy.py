@@ -157,6 +157,23 @@ async def oauth_config(request: Request, mcp_url: str = None):
         "client_id": OAUTH_CLIENT_ID
     }
 
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server(request: Request):
+    """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
+    host = request.headers.get('host', 'localhost')
+    base_url = f"https://{host}"
+    
+    return {
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/oauth/authorize",
+        "token_endpoint": f"{base_url}/oauth/token",
+        "scopes_supported": ["read", "write", "read write"],
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+        "code_challenge_methods_supported": ["plain", "S256"]
+    }
+
 @app.get("/.well-known/ai-plugin.json")
 async def ai_plugin_manifest(request: Request):
     """AI Plugin manifest for ChatGPT."""
