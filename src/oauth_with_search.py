@@ -357,7 +357,7 @@ async def root():
 
 def main():
     """Main entry point."""
-    port = int(os.getenv("PORT", settings.PORT))
+    port = int(os.getenv("PORT", 8080))  # Railway provides PORT env var
     logger.info(f"Starting OAuth + Search server on port {port}")
     logger.info(f"Wiki.js URL: {settings.WIKIJS_API_URL}")
     
