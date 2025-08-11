@@ -91,6 +91,20 @@ async def test():
     """Simple test endpoint."""
     return {"message": "Test endpoint working", "timestamp": datetime.utcnow().isoformat()}
 
+@app.get("/debug")
+async def debug():
+    """Debug endpoint to verify deployment."""
+    import os
+    return {
+        "message": "Debug endpoint working", 
+        "timestamp": datetime.utcnow().isoformat(),
+        "env_vars": {
+            "OAUTH_CLIENT_ID": os.getenv("OAUTH_CLIENT_ID", "NOT_SET"),
+            "OAUTH_CLIENT_SECRET": "***" if os.getenv("OAUTH_CLIENT_SECRET") else "NOT_SET",
+            "PORT": os.getenv("PORT", "NOT_SET")
+        }
+    }
+
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
@@ -366,20 +380,7 @@ async def invoke_tool(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"MCP server error: {str(e)}")
 
-# Catch-all disabled temporarily to debug route issues
-# @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
-# async def catch_all(request: Request, path: str):
-#     """Catch-all endpoint for debugging unknown requests."""
-#     print(f"Unknown request: {request.method} /{path}")
-#     if request.method == "POST":
-#         try:
-#             body = await request.json()
-#             print(f"Request body: {body}")
-#         except:
-#             pass
-#     
-#     # Return a generic response
-#     return {"error": "Endpoint not found", "path": f"/{path}", "method": request.method}
+# Catch-all completely removed to debug route issues
 
 if __name__ == "__main__":
     import uvicorn
