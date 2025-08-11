@@ -129,9 +129,27 @@ async def debug():
         "env_vars": {
             "OAUTH_CLIENT_ID": os.getenv("OAUTH_CLIENT_ID", "NOT_SET"),
             "OAUTH_CLIENT_SECRET": "***" if os.getenv("OAUTH_CLIENT_SECRET") else "NOT_SET",
-            "PORT": os.getenv("PORT", "NOT_SET")
+            "PORT": os.getenv("PORT", "NOT_SET"),
+            "OAUTH_REDIRECT_URI": OAUTH_REDIRECT_URI
         }
     }
+
+@app.post("/debug/clear_clients")
+async def clear_old_clients(db = Depends(get_db)):
+    """Clear old client registrations for testing."""
+    try:
+        # Delete all dynamically registered clients (keep hardcoded one)
+        deleted = db.query(OAuthClient).filter(
+            OAuthClient.client_id != OAUTH_CLIENT_ID
+        ).delete()
+        db.commit()
+        
+        return {
+            "message": f"Cleared {deleted} old client registrations",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 # OAuth Endpoints
 @app.get("/oauth/authorize")
