@@ -341,6 +341,99 @@ async def health_check():
     except Exception as e:
         return JSONResponse({"status": "unhealthy", "error": str(e)}, status_code=503)
 
+# ChatGPT Plugin Manifest
+@app.get("/ai-plugin.json")
+async def plugin_manifest():
+    """Return the ChatGPT plugin manifest."""
+    public_url = os.getenv("PUBLIC_URL", "https://wiki-js-mcp-production.up.railway.app")
+    
+    return JSONResponse({
+        "schema_version": "v1",
+        "name_for_model": "wikijs_search",
+        "name_for_human": "Wiki.js Search",
+        "description_for_model": "Search and retrieve information from a Wiki.js documentation system. Use this when users ask questions that might be answered by internal documentation, knowledge base articles, or wiki content.",
+        "description_for_human": "Search your organization's Wiki.js documentation",
+        "auth": {
+            "type": "oauth",
+            "client_url": f"{public_url}/oauth/authorize",
+            "scope": "read",
+            "authorization_url": f"{public_url}/oauth/authorize",
+            "authorization_content_type": "application/x-www-form-urlencoded",
+            "verification_tokens": {
+                "openai": os.getenv("OAUTH_CLIENT_SECRET", "")
+            }
+        },
+        "api": {
+            "type": "openapi",
+            "url": f"{public_url}/openapi.json"
+        },
+        "logo_url": f"{public_url}/logo.png",
+        "contact_email": "support@example.com",
+        "legal_info_url": f"{public_url}/legal"
+    })
+
+# OpenAPI specification for ChatGPT
+@app.get("/openapi.json")
+async def openapi_spec():
+    """Return OpenAPI specification for the search API."""
+    public_url = os.getenv("PUBLIC_URL", "https://wiki-js-mcp-production.up.railway.app")
+    
+    return JSONResponse({
+        "openapi": "3.0.1",
+        "info": {
+            "title": "Wiki.js Search API",
+            "description": "API for searching Wiki.js documentation",
+            "version": "v1"
+        },
+        "servers": [{"url": public_url}],
+        "paths": {
+            "/search": {
+                "get": {
+                    "operationId": "searchWiki",
+                    "summary": "Search Wiki.js documentation",
+                    "parameters": [
+                        {
+                            "in": "query",
+                            "name": "q",
+                            "schema": {"type": "string"},
+                            "required": True,
+                            "description": "Search query term"
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Search results",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "results": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "id": {"type": "integer"},
+                                                        "title": {"type": "string"},
+                                                        "description": {"type": "string"},
+                                                        "path": {"type": "string"},
+                                                        "locale": {"type": "string"}
+                                                    }
+                                                }
+                                            },
+                                            "total": {"type": "integer"},
+                                            "query": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
 # Root endpoint
 @app.get("/")
 async def root():
@@ -351,7 +444,9 @@ async def root():
         "endpoints": {
             "oauth_discovery": "/.well-known/oauth-authorization-server",
             "search": "/search?q=query",
-            "health": "/health"
+            "health": "/health",
+            "ai_plugin": "/ai-plugin.json",
+            "openapi": "/openapi.json"
         }
     })
 
