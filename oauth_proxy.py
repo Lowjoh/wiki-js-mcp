@@ -39,8 +39,23 @@ class OAuthToken(Base):
     id = Column(Integer, primary_key=True)
     access_token = Column(String(500), unique=True, nullable=False)
     refresh_token = Column(String(500), unique=True, nullable=True)
+    client_id = Column(String(255), nullable=False)
+    scope = Column(String(255), default="read write")
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class OAuthClient(Base):
+    __tablename__ = "oauth_clients"
+    
+    id = Column(Integer, primary_key=True)
+    client_id = Column(String(255), unique=True, nullable=False)
+    client_secret = Column(String(255), nullable=False)
+    redirect_uri = Column(String(500), nullable=False)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# Alias for compatibility
+OAuthAccessToken = OAuthToken
 
 Base.metadata.create_all(engine)
 
@@ -74,6 +89,19 @@ def get_db():
         yield db
     finally:
         db.close()
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security), db = Depends(get_db)):
+    """Verify OAuth token for protected endpoints."""
+    token = credentials.credentials
+    db_token = db.query(OAuthToken).filter(
+        OAuthToken.access_token == token,
+        OAuthToken.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not db_token:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return db_token
 
 # Health check and basic endpoints
 @app.get("/")
@@ -153,6 +181,8 @@ async def token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
     db_token = OAuthToken(
         access_token=access_token,
         refresh_token=refresh_token,
+        client_id=request.client_id,
+        scope="read write",
         expires_at=expires_at
     )
     db.add(db_token)
@@ -481,19 +511,6 @@ async def list_tools():
     }
 
 # Proxy endpoints to MCP server
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security), db = Depends(get_db)):
-    """Verify OAuth token."""
-    token = credentials.credentials
-    
-    db_token = db.query(OAuthToken).filter(
-        OAuthToken.access_token == token,
-        OAuthToken.expires_at > datetime.utcnow()
-    ).first()
-    
-    if not db_token:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    return db_token
 
 @app.post("/tools/{tool_name}/invoke")
 async def invoke_tool(
