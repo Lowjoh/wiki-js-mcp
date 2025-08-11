@@ -86,6 +86,11 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+@app.get("/test")
+async def test():
+    """Simple test endpoint."""
+    return {"message": "Test endpoint working", "timestamp": datetime.utcnow().isoformat()}
+
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
