@@ -26,6 +26,9 @@ aiosqlite>=0.19.0
 # Retry logic
 tenacity>=8.0.0
 
+# OAuth 2.0 and JWT support
+PyJWT>=2.8.0
+
 # Development Dependencies (optional)
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

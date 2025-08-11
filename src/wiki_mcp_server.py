@@ -24,11 +24,41 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 from tenacity import retry, stop_after_attempt, wait_exponential
-from pydantic import Field
+from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
+import secrets
+import base64
+from urllib.parse import urlencode
+import jwt
+from datetime import datetime, timedelta
 
 # Create FastMCP server
 mcp = FastMCP("Wiki.js Integration")
+
+# Security middleware for public deployment
+@mcp.middleware
+async def security_middleware(request, call_next):
+    """Security middleware for public deployment."""
+    if settings.ENVIRONMENT == "production":
+        # Check API key authentication
+        if settings.MCP_API_KEY:
+            api_key = request.headers.get("X-MCP-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "")
+            if not api_key or api_key != settings.MCP_API_KEY:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing API key")
+        
+        # Check allowed origins (basic CORS protection)
+        if settings.MCP_ALLOWED_ORIGINS:
+            origin = request.headers.get("Origin", "")
+            allowed_origins = [o.strip() for o in settings.MCP_ALLOWED_ORIGINS.split(",") if o.strip()]
+            if origin and allowed_origins and origin not in allowed_origins:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=403, detail="Forbidden: Origin not allowed")
+    
+    return await call_next(request)
 
 # Configuration
 class Settings(BaseSettings):
@@ -42,6 +72,19 @@ class Settings(BaseSettings):
     LOG_FILE: str = Field(default="wikijs_mcp.log")
     REPOSITORY_ROOT: str = Field(default="./")
     DEFAULT_SPACE_NAME: str = Field(default="Documentation")
+    
+    # Security Settings for Public Deployment
+    MCP_API_KEY: Optional[str] = Field(default=None)
+    MCP_ALLOWED_ORIGINS: str = Field(default="")
+    ENVIRONMENT: str = Field(default="development")
+    
+    # OAuth 2.0 Settings
+    OAUTH_CLIENT_ID: str = Field(default="wikijs-mcp-client")
+    OAUTH_CLIENT_SECRET: str = Field(default="your-secure-client-secret-here")
+    OAUTH_JWT_SECRET: str = Field(default="your-jwt-secret-key-for-oauth-tokens")
+    OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
+    OAUTH_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30)
+    OAUTH_REDIRECT_URI: str = Field(default="https://chat.openai.com/aip/plugin-oauth-callback")
     
     class Config:
         env_file = ".env"
@@ -89,10 +132,114 @@ class RepositoryContext(Base):
     space_id = Column(Integer)
     last_updated = Column(DateTime, default=datetime.datetime.utcnow)
 
+# OAuth 2.0 Database Models
+class OAuthClient(Base):
+    __tablename__ = "oauth_clients"
+    
+    id = Column(Integer, primary_key=True)
+    client_id = Column(String(255), unique=True, nullable=False)
+    client_secret = Column(String(255), nullable=False)
+    redirect_uri = Column(String(500), nullable=False)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class OAuthAuthorizationCode(Base):
+    __tablename__ = "oauth_authorization_codes"
+    
+    id = Column(Integer, primary_key=True)
+    code = Column(String(255), unique=True, nullable=False)
+    client_id = Column(String(255), nullable=False)
+    redirect_uri = Column(String(500), nullable=False)
+    scope = Column(String(255), default="read write")
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Integer, default=0)  # 0 = not used, 1 = used
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class OAuthAccessToken(Base):
+    __tablename__ = "oauth_access_tokens"
+    
+    id = Column(Integer, primary_key=True)
+    access_token = Column(String(500), unique=True, nullable=False)
+    refresh_token = Column(String(500), unique=True, nullable=True)
+    client_id = Column(String(255), nullable=False)
+    scope = Column(String(255), default="read write")
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 # Database setup
 engine = create_engine(f"sqlite:///{settings.WIKIJS_MCP_DB}")
 Base.metadata.create_all(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Pydantic Models for OAuth
+class TokenRequest(BaseModel):
+    grant_type: str
+    code: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    refresh_token: Optional[str] = None
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    refresh_token: Optional[str] = None
+    scope: str = "read write"
+
+# OAuth Utility Functions
+def generate_authorization_code() -> str:
+    """Generate a secure authorization code."""
+    return secrets.token_urlsafe(32)
+
+def generate_access_token() -> str:
+    """Generate a secure access token."""
+    return secrets.token_urlsafe(64)
+
+def generate_refresh_token() -> str:
+    """Generate a secure refresh token."""
+    return secrets.token_urlsafe(64)
+
+def create_jwt_token(payload: dict, secret: str, expires_in_minutes: int = 60) -> str:
+    """Create a JWT token with expiration."""
+    exp = datetime.utcnow() + timedelta(minutes=expires_in_minutes)
+    payload.update({"exp": exp, "iat": datetime.utcnow()})
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+def verify_jwt_token(token: str, secret: str) -> dict:
+    """Verify and decode a JWT token."""
+    try:
+        return jwt.decode(token, secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# OAuth Security
+security_scheme = HTTPBearer()
+
+def get_db():
+    """Get database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+async def verify_oauth_token(credentials: HTTPAuthorizationCredentials = Depends(security_scheme), db = Depends(get_db)):
+    """Verify OAuth access token."""
+    token = credentials.credentials
+    
+    # Check if token exists in database
+    db_token = db.query(OAuthAccessToken).filter(
+        OAuthAccessToken.access_token == token,
+        OAuthAccessToken.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not db_token:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return db_token
 
 class WikiJSClient:
     """Wiki.js GraphQL API client for handling requests."""
@@ -258,10 +405,202 @@ def extract_code_structure(file_path: str) -> Dict[str, Any]:
         logger.error(f"Error parsing {file_path}: {e}")
         return {'classes': [], 'functions': [], 'imports': []}
 
-# MCP Tools Implementation
+# OAuth 2.0 Endpoints for ChatGPT Integration
+
+# Initialize default OAuth client on startup
+def init_oauth_client():
+    """Initialize default OAuth client for ChatGPT."""
+    db = SessionLocal()
+    try:
+        # Check if default client exists
+        existing_client = db.query(OAuthClient).filter(
+            OAuthClient.client_id == settings.OAUTH_CLIENT_ID
+        ).first()
+        
+        if not existing_client:
+            # Create default client for ChatGPT
+            default_client = OAuthClient(
+                client_id=settings.OAUTH_CLIENT_ID,
+                client_secret=settings.OAUTH_CLIENT_SECRET,
+                redirect_uri=settings.OAUTH_REDIRECT_URI,
+                name="ChatGPT Custom GPT"
+            )
+            db.add(default_client)
+            db.commit()
+            logger.info(f"Created default OAuth client: {settings.OAUTH_CLIENT_ID}")
+    finally:
+        db.close()
+
+# Add OAuth endpoints to FastMCP
+@mcp.get("/oauth/authorize")
+async def oauth_authorize(
+    client_id: str,
+    redirect_uri: str,
+    response_type: str = "code",
+    scope: str = "read write",
+    state: str = None,
+    db = Depends(get_db)
+):
+    """OAuth 2.0 Authorization endpoint for ChatGPT."""
+    # Verify client
+    client = db.query(OAuthClient).filter(
+        OAuthClient.client_id == client_id,
+        OAuthClient.redirect_uri == redirect_uri
+    ).first()
+    
+    if not client:
+        raise HTTPException(status_code=400, detail="Invalid client_id or redirect_uri")
+    
+    if response_type != "code":
+        raise HTTPException(status_code=400, detail="Unsupported response_type")
+    
+    # Generate authorization code
+    auth_code = generate_authorization_code()
+    expires_at = datetime.utcnow() + timedelta(minutes=10)  # Short-lived code
+    
+    # Store authorization code
+    db_code = OAuthAuthorizationCode(
+        code=auth_code,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scope=scope,
+        expires_at=expires_at
+    )
+    db.add(db_code)
+    db.commit()
+    
+    # Build redirect URL
+    params = {"code": auth_code}
+    if state:
+        params["state"] = state
+    
+    redirect_url = f"{redirect_uri}?{urlencode(params)}"
+    
+    # For ChatGPT, we auto-approve and redirect
+    return JSONResponse({
+        "redirect_url": redirect_url,
+        "message": "Authorization granted. Please use the provided code to exchange for an access token."
+    })
+
+@mcp.post("/oauth/token")
+async def oauth_token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
+    """OAuth 2.0 Token endpoint for ChatGPT."""
+    
+    if request.grant_type == "authorization_code":
+        # Validate authorization code
+        if not request.code or not request.client_id or not request.client_secret:
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+        
+        # Verify client credentials
+        client = db.query(OAuthClient).filter(
+            OAuthClient.client_id == request.client_id,
+            OAuthClient.client_secret == request.client_secret
+        ).first()
+        
+        if not client:
+            raise HTTPException(status_code=401, detail="Invalid client credentials")
+        
+        # Verify authorization code
+        auth_code = db.query(OAuthAuthorizationCode).filter(
+            OAuthAuthorizationCode.code == request.code,
+            OAuthAuthorizationCode.client_id == request.client_id,
+            OAuthAuthorizationCode.used == 0,
+            OAuthAuthorizationCode.expires_at > datetime.utcnow()
+        ).first()
+        
+        if not auth_code:
+            raise HTTPException(status_code=400, detail="Invalid or expired authorization code")
+        
+        # Mark code as used
+        auth_code.used = 1
+        
+        # Generate tokens
+        access_token = generate_access_token()
+        refresh_token = generate_refresh_token()
+        
+        expires_at = datetime.utcnow() + timedelta(minutes=settings.OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES)
+        
+        # Store access token
+        db_token = OAuthAccessToken(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            client_id=request.client_id,
+            scope=auth_code.scope,
+            expires_at=expires_at
+        )
+        db.add(db_token)
+        db.commit()
+        
+        return TokenResponse(
+            access_token=access_token,
+            expires_in=settings.OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            refresh_token=refresh_token,
+            scope=auth_code.scope
+        )
+    
+    elif request.grant_type == "refresh_token":
+        if not request.refresh_token:
+            raise HTTPException(status_code=400, detail="Missing refresh_token")
+        
+        # Find existing token
+        existing_token = db.query(OAuthAccessToken).filter(
+            OAuthAccessToken.refresh_token == request.refresh_token
+        ).first()
+        
+        if not existing_token:
+            raise HTTPException(status_code=400, detail="Invalid refresh token")
+        
+        # Generate new access token
+        new_access_token = generate_access_token()
+        expires_at = datetime.utcnow() + timedelta(minutes=settings.OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES)
+        
+        # Update token
+        existing_token.access_token = new_access_token
+        existing_token.expires_at = expires_at
+        db.commit()
+        
+        return TokenResponse(
+            access_token=new_access_token,
+            expires_in=settings.OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            refresh_token=request.refresh_token,
+            scope=existing_token.scope
+        )
+    
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported grant_type")
+
+@mcp.get("/.well-known/ai-plugin.json")
+async def ai_plugin_manifest(request: Request):
+    """AI Plugin manifest for ChatGPT discovery."""
+    host = request.headers.get('host', 'localhost')
+    scheme = "https" if settings.ENVIRONMENT == "production" else "http"
+    base_url = f"{scheme}://{host}"
+    
+    return {
+        "schema_version": "v1",
+        "name_for_human": "Wiki.js MCP Integration",
+        "name_for_model": "wikijs_mcp",
+        "description_for_human": "Manage Wiki.js documentation with hierarchical structure support.",
+        "description_for_model": "Comprehensive Wiki.js integration for creating, updating, searching, and managing documentation pages with support for hierarchical organization, file mappings, and bulk operations.",
+        "auth": {
+            "type": "oauth",
+            "authorization_url": f"{base_url}/oauth/authorize",
+            "token_url": f"{base_url}/oauth/token",
+            "scope": "read write"
+        },
+        "api": {
+            "type": "openapi",
+            "url": f"{base_url}/openapi.json"
+        },
+        "logo_url": f"{base_url}/logo.png",
+        "contact_email": "support@example.com",
+        "legal_info_url": f"{base_url}/legal"
+    }
+
+# MCP Tools Implementation (now OAuth-protected)
 
 @mcp.tool()
-async def wikijs_create_page(title: str, content: str, space_id: str = "", parent_id: str = "") -> str:
+async def wikijs_create_page(title: str, content: str, space_id: str = "", parent_id: str = "", token = Depends(verify_oauth_token)) -> str:
     """
     Create a new page in Wiki.js with support for hierarchical organization.
     
@@ -2051,8 +2390,12 @@ def main():
     import asyncio
     
     async def run_server():
+        # Initialize OAuth client
+        init_oauth_client()
+        
+        # Authenticate with Wiki.js
         await wikijs.authenticate()
-        logger.info("Wiki.js MCP Server started")
+        logger.info("Wiki.js MCP Server started with OAuth 2.0 support")
         
     # Run the server
     mcp.run()
