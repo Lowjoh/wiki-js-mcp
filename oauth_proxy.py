@@ -85,6 +85,21 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+# Catch-all for debugging
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def catch_all(request: Request, path: str):
+    """Catch-all endpoint for debugging unknown requests."""
+    print(f"Unknown request: {request.method} /{path}")
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            print(f"Request body: {body}")
+        except:
+            pass
+    
+    # Return a generic response
+    return {"error": "Endpoint not found", "path": f"/{path}", "method": request.method}
+
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
@@ -157,6 +172,7 @@ async def oauth_config(request: Request, mcp_url: str = None):
         "token_url": f"{base_url}/oauth/token",
         "scope": "read write",
         "client_id": OAUTH_CLIENT_ID,
+        "client_secret": OAUTH_CLIENT_SECRET,  # Include client secret for ChatGPT
         "custom_redirect_url_params": None,
         "pkce_required": True,
         "pkce_methods": ["plain", "S256"],
@@ -206,6 +222,27 @@ async def ai_plugin_manifest(request: Request):
         "contact_email": "support@example.com",
         "legal_info_url": f"{base_url}/legal"
     }
+
+# OAuth Client validation endpoint
+@app.post("/oauth/validate_client")
+async def validate_oauth_client(request: Request):
+    """Validate OAuth client configuration for ChatGPT."""
+    body = await request.json()
+    
+    # Validate the client configuration
+    client_id = body.get("client_id", OAUTH_CLIENT_ID)
+    
+    if client_id == OAUTH_CLIENT_ID:
+        return {
+            "valid": True,
+            "client_id": client_id,
+            "redirect_uris": [OAUTH_REDIRECT_URI],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "read write"
+        }
+    else:
+        return {"valid": False, "error": "Invalid client_id"}
 
 # ChatGPT MCP Connector endpoints
 @app.post("/backend-api/aip/connectors/mcp")
