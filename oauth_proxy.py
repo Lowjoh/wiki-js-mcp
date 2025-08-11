@@ -86,21 +86,6 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
-# Catch-all for debugging
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
-async def catch_all(request: Request, path: str):
-    """Catch-all endpoint for debugging unknown requests."""
-    print(f"Unknown request: {request.method} /{path}")
-    if request.method == "POST":
-        try:
-            body = await request.json()
-            print(f"Request body: {body}")
-        except:
-            pass
-    
-    # Return a generic response
-    return {"error": "Endpoint not found", "path": f"/{path}", "method": request.method}
-
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
@@ -375,6 +360,21 @@ async def invoke_tool(
                 }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"MCP server error: {str(e)}")
+
+# Catch-all for debugging (must be last!)
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def catch_all(request: Request, path: str):
+    """Catch-all endpoint for debugging unknown requests."""
+    print(f"Unknown request: {request.method} /{path}")
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            print(f"Request body: {body}")
+        except:
+            pass
+    
+    # Return a generic response
+    return {"error": "Endpoint not found", "path": f"/{path}", "method": request.method}
 
 if __name__ == "__main__":
     import uvicorn
