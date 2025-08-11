@@ -26,6 +26,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import threading
 
 # Create FastMCP server
 mcp = FastMCP("Wiki.js Integration")
@@ -2046,15 +2051,113 @@ async def wikijs_cleanup_orphaned_mappings() -> str:
         logger.error(error_msg)
         return json.dumps({"error": error_msg})
 
+# FastAPI web server for ChatGPT integration
+app = FastAPI(
+    title="Wiki.js MCP Search API",
+    description="Search API for Wiki.js documentation accessible to ChatGPT",
+    version="1.0.0"
+)
+
+# Add CORS middleware for ChatGPT access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ChatGPT needs access
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/search")
+async def search_endpoint(q: str = Query(..., description="Search query term")):
+    """
+    Search endpoint compatible with ChatGPT.
+    
+    Args:
+        q: The search query term
+        
+    Returns:
+        JSON object with search results
+    """
+    try:
+        # Use the existing wikijs_search_pages function
+        search_result = await wikijs_search_pages(q)
+        search_data = json.loads(search_result)
+        
+        if "error" in search_data:
+            raise HTTPException(status_code=500, detail=search_data["error"])
+        
+        # Transform results to ChatGPT-compatible format
+        results = []
+        for item in search_data.get("results", []):
+            results.append({
+                "title": item.get("title", ""),
+                "link": f"{settings.WIKIJS_API_URL.rstrip('/')}/{item.get('path', '')}",
+                "snippet": item.get("snippet", ""),
+                "score": item.get("score", 1.0)
+            })
+        
+        return JSONResponse({
+            "results": results,
+            "total": search_data.get("total", len(results))
+        })
+        
+    except Exception as e:
+        logger.error(f"Search endpoint error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+@app.get("/ai-plugin.json")
+async def plugin_manifest():
+    """Plugin manifest for ChatGPT integration."""
+    return JSONResponse({
+        "schema_version": "v1",
+        "name_for_human": "Wiki.js MCP Search",
+        "name_for_model": "wikijs_mcp_search",
+        "description_for_human": "Search and access Wiki.js documentation",
+        "description_for_model": "API for searching Wiki.js documentation pages and content",
+        "api": {
+            "type": "openapi",
+            "url": f"{settings.WIKIJS_API_URL}/openapi.json"
+        },
+        "auth": {
+            "type": "none"
+        },
+        "logo_url": f"{settings.WIKIJS_API_URL}/logo.png",
+        "contact_email": "support@example.com",
+        "legal_info_url": f"{settings.WIKIJS_API_URL}/legal"
+    })
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    try:
+        await wikijs.authenticate()
+        return JSONResponse({"status": "healthy", "wiki_connected": True})
+    except Exception as e:
+        return JSONResponse({"status": "unhealthy", "error": str(e)}, status_code=503)
+
+def run_web_server():
+    """Run the FastAPI web server in a separate thread."""
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
 def main():
     """Main entry point for the MCP server."""
     import asyncio
+    import os
     
     async def run_server():
         await wikijs.authenticate()
         logger.info("Wiki.js MCP Server started")
+    
+    # Check if we should run the web server for ChatGPT integration
+    run_web = os.getenv("RUN_WEB_SERVER", "false").lower() == "true"
+    
+    if run_web:
+        # Start web server in a separate thread
+        web_thread = threading.Thread(target=run_web_server, daemon=True)
+        web_thread.start()
+        logger.info("Web server started on port 8000 for ChatGPT integration")
         
-    # Run the server
+    # Run the MCP server
     mcp.run()
 
 if __name__ == "__main__":
