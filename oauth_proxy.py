@@ -246,31 +246,50 @@ async def authorize(
     return RedirectResponse(url=redirect_url)
 
 @app.post("/oauth/token")
-async def token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
+async def token(request: Request, db = Depends(get_db)) -> TokenResponse:
     """OAuth token endpoint - supports dynamic clients."""
-    print(f"DEBUG: Token request - client_id: {request.client_id}, grant_type: {request.grant_type}")
-    
-    if request.grant_type != "authorization_code":
-        raise HTTPException(status_code=400, detail="Unsupported grant_type")
+    try:
+        # Parse request body manually to handle any format
+        if request.headers.get("content-type") == "application/x-www-form-urlencoded":
+            form_data = await request.form()
+            body = dict(form_data)
+        else:
+            body = await request.json()
+        
+        print(f"DEBUG: Token request body: {body}")
+        
+        grant_type = body.get("grant_type")
+        client_id = body.get("client_id")
+        client_secret = body.get("client_secret")
+        code = body.get("code")
+        redirect_uri = body.get("redirect_uri")
+        
+        print(f"DEBUG: Token request - client_id: {client_id}, grant_type: {grant_type}")
+        
+        if grant_type != "authorization_code":
+            raise HTTPException(status_code=400, detail="Unsupported grant_type")
+    except Exception as e:
+        print(f"ERROR: Failed to parse token request: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Invalid request format: {str(e)}")
     
     # Validate client credentials (check both hardcoded and dynamic clients)
     valid_client = False
     
     # Check hardcoded client
-    if (request.client_id == OAUTH_CLIENT_ID and 
-        request.client_secret == OAUTH_CLIENT_SECRET):
+    if (client_id == OAUTH_CLIENT_ID and 
+        client_secret == OAUTH_CLIENT_SECRET):
         valid_client = True
     else:
         # Check dynamically registered clients
         db_client = db.query(OAuthClient).filter(
-            OAuthClient.client_id == request.client_id,
-            OAuthClient.client_secret == request.client_secret
+            OAuthClient.client_id == client_id,
+            OAuthClient.client_secret == client_secret
         ).first()
         if db_client:
             valid_client = True
     
     if not valid_client:
-        print(f"ERROR: Invalid client credentials for: {request.client_id}")
+        print(f"ERROR: Invalid client credentials for: {client_id}")
         raise HTTPException(status_code=401, detail="Invalid client credentials")
     
     # Generate tokens
@@ -281,7 +300,7 @@ async def token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
     db_token = OAuthToken(
         access_token=access_token,
         refresh_token=refresh_token,
-        client_id=request.client_id,
+        client_id=client_id,
         scope="read write",
         expires_at=expires_at
     )
