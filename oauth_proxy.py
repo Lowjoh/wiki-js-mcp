@@ -74,6 +74,17 @@ def get_db():
     finally:
         db.close()
 
+# Health check and basic endpoints
+@app.get("/")
+async def root():
+    """Root endpoint for health check."""
+    return {"status": "ok", "service": "Wiki.js MCP OAuth Proxy"}
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
@@ -132,6 +143,19 @@ async def token(request: TokenRequest, db = Depends(get_db)) -> TokenResponse:
         expires_in=3600,  # 1 hour
         refresh_token=refresh_token
     )
+
+@app.get("/oauth_config")
+async def oauth_config(request: Request, mcp_url: str = None):
+    """OAuth configuration endpoint for ChatGPT MCP integration."""
+    host = request.headers.get('host', 'localhost')
+    base_url = f"https://{host}"
+    
+    return {
+        "authorization_url": f"{base_url}/oauth/authorize",
+        "token_url": f"{base_url}/oauth/token",
+        "scope": "read write",
+        "client_id": OAUTH_CLIENT_ID
+    }
 
 @app.get("/.well-known/ai-plugin.json")
 async def ai_plugin_manifest(request: Request):
