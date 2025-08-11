@@ -151,6 +151,48 @@ async def clear_old_clients(db = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
 
+@app.post("/debug/register_chatgpt_client")
+async def register_chatgpt_client(db = Depends(get_db)):
+    """Register the specific ChatGPT client ID with correct redirect URI."""
+    try:
+        # The client ID that ChatGPT is using
+        chatgpt_client_id = "chatgpt-mcp-2LTk66lyNl8FuuqPmStFPw"
+        chatgpt_client_secret = secrets.token_urlsafe(32)
+        
+        # Check if it already exists
+        existing = db.query(OAuthClient).filter(
+            OAuthClient.client_id == chatgpt_client_id
+        ).first()
+        
+        if existing:
+            # Update the redirect URI
+            existing.redirect_uri = "https://chatgpt.com/connector_platform_oauth_redirect"
+            db.commit()
+            return {
+                "message": "Updated existing ChatGPT client with correct redirect URI",
+                "client_id": chatgpt_client_id
+            }
+        else:
+            # Create new client with the specific ID ChatGPT expects
+            new_client = OAuthClient(
+                client_id=chatgpt_client_id,
+                client_secret=chatgpt_client_secret,
+                redirect_uri="https://chatgpt.com/connector_platform_oauth_redirect",
+                name="ChatGPT MCP Connector",
+                created_at=datetime.utcnow()
+            )
+            db.add(new_client)
+            db.commit()
+            
+            return {
+                "message": "Registered ChatGPT client with correct redirect URI",
+                "client_id": chatgpt_client_id,
+                "client_secret": chatgpt_client_secret
+            }
+            
+    except Exception as e:
+        return {"error": str(e)}
+
 # OAuth Endpoints
 @app.get("/oauth/authorize")
 async def authorize(
