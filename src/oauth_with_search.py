@@ -305,13 +305,24 @@ async def search_endpoint(
     q: str = Query(..., description="Search query")
 ):
     """Search endpoint for ChatGPT."""
+    # Debug logging
+    logger.info(f"Search request received: q={q}")
+    logger.info(f"Headers: {dict(request.headers)}")
+    
     # Verify OAuth token
     auth_header = request.headers.get("Authorization", "")
+    logger.info(f"Auth header: {auth_header[:20]}..." if auth_header else "No auth header")
+    
     if not auth_header.startswith("Bearer "):
+        logger.warning("Missing or invalid Authorization header")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     token = auth_header[7:]
+    logger.info(f"Token check: token in access_tokens = {token in access_tokens}")
+    logger.info(f"Current access_tokens count: {len(access_tokens)}")
+    
     if token not in access_tokens:
+        logger.warning(f"Invalid access token: {token[:10]}...")
         raise HTTPException(status_code=401, detail="Invalid access token")
     
     try:
@@ -449,6 +460,20 @@ async def root():
             "openapi": "/openapi.json"
         }
     })
+
+@app.post("/")
+async def root_post():
+    """Handle POST requests to root (ChatGPT might be confused about endpoints)."""
+    logger.warning("Received POST to root endpoint - redirecting to GET")
+    return JSONResponse({
+        "error": "POST not supported on root endpoint",
+        "message": "Use GET /search?q=query for search functionality",
+        "available_endpoints": {
+            "search": "GET /search?q=query",
+            "health": "GET /health",
+            "plugin": "GET /ai-plugin.json"
+        }
+    }, status_code=405)
 
 def main():
     """Main entry point."""
