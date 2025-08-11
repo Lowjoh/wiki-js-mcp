@@ -25,7 +25,8 @@ OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "wikijs-mcp-client")
 OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "your-client-secret")
 OAUTH_JWT_SECRET = os.getenv("OAUTH_JWT_SECRET", "your-jwt-secret")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
-OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://chat.openai.com/aip/plugin-oauth-callback")
+# ChatGPT MCP connector uses this specific callback format
+OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://chatgpt.com/aip/oauth/callback")
 
 # Database setup
 engine = create_engine("sqlite:///oauth_tokens.db")
@@ -165,19 +166,30 @@ async def oauth_config(request: Request, mcp_url: str = None):
     host = request.headers.get('host', 'localhost')
     base_url = f"https://{host}"
     
+    # Debug: Log the environment variables
+    print(f"DEBUG: OAUTH_CLIENT_ID = {OAUTH_CLIENT_ID}")
+    print(f"DEBUG: OAUTH_CLIENT_SECRET = {'***' if OAUTH_CLIENT_SECRET else 'NOT SET'}")
+    print(f"DEBUG: OAUTH_REDIRECT_URI = {OAUTH_REDIRECT_URI}")
+    
     # Return the format that ChatGPT expects for MCP OAuth
-    return {
+    config = {
         "type": "OAUTH",
         "authorization_url": f"{base_url}/oauth/authorize",
         "token_url": f"{base_url}/oauth/token",
         "scope": "read write",
         "client_id": OAUTH_CLIENT_ID,
-        "client_secret": OAUTH_CLIENT_SECRET,  # Include client secret for ChatGPT
         "custom_redirect_url_params": None,
         "pkce_required": True,
         "pkce_methods": ["plain", "S256"],
         "allow_http_redirect": True
     }
+    
+    # Only include client_secret if it's set
+    if OAUTH_CLIENT_SECRET and OAUTH_CLIENT_SECRET != "your-secure-client-secret-here":
+        config["client_secret"] = OAUTH_CLIENT_SECRET
+    
+    print(f"DEBUG: OAuth config response: {config}")
+    return config
 
 @app.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server(request: Request):
